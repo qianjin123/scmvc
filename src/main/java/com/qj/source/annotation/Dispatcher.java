@@ -3,7 +3,9 @@ package com.qj.source.annotation;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.URL;
@@ -45,9 +47,9 @@ public class Dispatcher extends HttpServlet {
 				String className = classPath.substring(0,classPath.lastIndexOf("."));//com.xx.xx
 				String cname = className.substring(className.lastIndexOf(".")+1); //class名称
 				Class clazz = Class.forName(className);
-				if(clazz.isAnnotationPresent(QjClassAnno.class)){
-					QjClassAnno qjc = (QjClassAnno) clazz.getAnnotation(QjClassAnno.class);
-					beans.put(qjc.value(), clazz);//class对象存入map
+				System.out.println("type:"+clazz.getTypeName()); 
+				if(clazz.isAnnotationPresent(QjCompent.class)){
+					beans.put(clazz.getTypeName(), clazz);//class类名存入map
 					
 				}
 				 
@@ -77,21 +79,19 @@ public class Dispatcher extends HttpServlet {
 		System.out.println(req.getContextPath()+"  "+req.getRequestURI()+"  "+req.getRequestURL() );
 		Set<Entry<String, Class>> b = beans.entrySet();
 		boolean methodAnno = false; //判断方法上注解路径是否匹配请求路径
-		boolean classAnno = false; //判断类上注解路径是否匹配请求路径
 		for (Entry<String, Class> entry : b) {
 			Class clazz = entry.getValue();//类的实例
 			Field[] fields = clazz.getDeclaredFields();
 			Object instance = null; //对象实例
 			for (Field field : fields) { //遍历类中所有属性
-				String fieldName = field.getName();
-				for (Entry<String, Class> entry_ : b) {// 注入的元素的属性名orderService与bean注解的名字相匹配（@QjClassAnno("orderService")）
-					String beanName = entry_.getKey(); // /order  /orderService 注意带有斜杠
-					if(fieldName.equals(beanName.replace("/", ""))){ //如果相等就注入
-						Class cl = entry_.getValue();
+				Class<?> fieldType = field.getType(); //类中依赖的类型 orderService.class
+				for (Entry<String, Class> entry_ : b) { 
+					Class classType =  entry_.getValue(); //存入map 的Class对象 = OrderServiceImpl.class
+					if( fieldType.isAssignableFrom(classType)  ){ //fieldType是否是classType的父类,  如果相等就注入
 						field.setAccessible(true);//如果是private私有的，设置可访问的
 						try {
 							instance = clazz.newInstance();
-							field.set(instance, cl.newInstance()); //参数一：所在类的对象 参数二：本身的实例
+							field.set(instance, classType.newInstance()); //参数一：所在类的对象 参数二：本身的实例
 						} catch (Exception e) {
 							e.printStackTrace();
 						} 
@@ -100,19 +100,18 @@ public class Dispatcher extends HttpServlet {
 			}
 			
 			//匹配路径
-			String key = entry.getKey(); // /order
-			System.out.println(key+"::"+entry.getValue());
-			if(mapping.contains(key)){ //请求路径包含类注解中得路径
-				
-				Method[] methods = clazz.getMethods();
-				for (Method method : methods) { //遍历此类所有方法
-					if(method.isAnnotationPresent(QjMethodAnno.class)){
-						QjMethodAnno qm = method.getAnnotation(QjMethodAnno.class);
-						String methodMapping = qm.value(); // /list
-						if( (key+methodMapping).equals(mapping)   ){ //类注解路径+方法注解路径 = 请求路径
-							Object[] args = new Object[]{};
-							try {
-								Parameter[] para = method.getParameters();
+			if(clazz.isAnnotationPresent(Qjmapping.class)){
+				Qjmapping q = (Qjmapping) clazz.getAnnotation(Qjmapping.class);
+				String classMapping = q.value(); // /order
+				if(mapping.contains(classMapping)){
+					Method[] method = clazz.getMethods();
+					for (Method m : method) {
+						if(m.isAnnotationPresent(Qjmapping.class)){
+							Qjmapping qj = m.getAnnotation(Qjmapping.class);
+							String methMapping = qj.value();
+							if( (classMapping+methMapping).equals(mapping) ){
+								Object[] args = new Object[]{};
+								Parameter[] para = m.getParameters();
 								for (int i = 0; i < para.length; i++) {
 									Class parameClass = para[i].getType();
 									if(int.class == parameClass ){
@@ -123,21 +122,23 @@ public class Dispatcher extends HttpServlet {
 									}
 								}
 								//调用方法
-								Object o = method.invoke(instance, args);//这个instance一定是被注入相关依赖后得实例
-								out.print(o.toString());
-							} catch (Exception e) {
-								e.printStackTrace();
+								try {
+									Object o = m.invoke(instance, args); //这个instance一定是被注入相关依赖后得实例
+									out.print(o.toString());
+								} catch ( Exception e) {
+									e.printStackTrace();
+								} 
+								 methodAnno = true; 
 							}
-							 methodAnno = true; 
 						}
-					
 					}
 				}
-				
-				classAnno = false;
+			
+			
 			}
+			 
 		}
-		if(!classAnno && !methodAnno){
+		if( !methodAnno){
 			out.print("404");
 			return;
 		} 
